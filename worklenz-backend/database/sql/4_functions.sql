@@ -1555,9 +1555,7 @@ BEGIN
                                   o.subscription_status,
                                   o.license_type_id,
                                   o.trial_expire_date,
-                                  o.id      AS organization_id,
-                                  o.business_plan_override,
-                                  o.team_member_limit_override
+                                  o.id      AS organization_id
                            FROM user_team_data utd
                                     INNER JOIN teams t ON t.id = utd.team_id
                                     LEFT JOIN organizations o ON o.user_id = t.user_id),
@@ -1571,40 +1569,16 @@ BEGIN
                                  0     AS redeemed_codes_count,
                                  FALSE AS appsumo_business_eligible
                           FROM team_org_data tod),
-         plan_trial_data AS (SELECT pt.id                                                            AS trial_id,
-                                    pt.plan_tier_id,
-                                    pt.trial_end_date                                                AS plan_trial_end_date,
-                                    pt.is_active,
-                                    lpt.tier_name                                                    AS active_plan_trial,
-                                    lpt.display_name                                                 AS trial_plan_display_name,
-                                    GREATEST(0,
-                                             EXTRACT(DAY FROM (pt.trial_end_date - NOW()))::INTEGER) AS trial_days_remaining
-                             FROM team_org_data tod
-                                      LEFT JOIN appsumo_data ad ON TRUE
-                                      LEFT JOIN licensing_plan_trials pt
-                                                ON pt.user_id = tod.owner_id
-                                                    AND pt.organization_id = tod.organization_id
-                                                    AND pt.is_active = TRUE
-                                                    AND pt.trial_end_date > NOW()
-                                      LEFT JOIN licensing_plan_tiers lpt ON lpt.id = pt.plan_tier_id
-                             WHERE pt.id IS NULL
-                                OR NOT (
-                                 ad.is_ltd = TRUE
-                                     AND COALESCE(ad.redeemed_codes_count, 0) < 5
-                                     AND lpt.tier_name = 'BUSINESS_LARGE'
-                                 )
-                             ORDER BY pt.trial_end_date DESC
-                             LIMIT 1),
          notification_data AS (SELECT tod.*,
-                                      ptd.active_plan_trial,
-                                      ptd.plan_trial_end_date,
-                                      ptd.trial_days_remaining,
-                                      ptd.trial_plan_display_name,
+                                      FALSE AS is_plan_trial,
+                                      NULL::DATE AS plan_trial_end_date,
+                                      NULL::INTEGER AS trial_days_remaining,
+                                      NULL::TEXT AS active_plan_trial,
+                                      NULL::TEXT AS trial_plan_display_name,
                                       ad.redeemed_codes_count,
                                       (ad.is_ltd AND ad.appsumo_business_eligible)   AS appsumo_business_eligible,
                                       COALESCE(ns.email_notifications_enabled, TRUE) AS email_notifications_enabled
                                FROM team_org_data tod
-                                        LEFT JOIN plan_trial_data ptd ON TRUE
                                         LEFT JOIN appsumo_data ad ON TRUE
                                         LEFT JOIN notification_settings ns
                                                   ON (ns.user_id = tod.id AND ns.team_id = tod.team_id)),
@@ -1615,64 +1589,17 @@ BEGIN
          complete_user_data AS (SELECT nd.*,
                                        tz.name                                                             AS timezone_name,
                                        (SELECT r.name FROM roles r WHERE r.id = tm.role_id)                AS role_name,
-                                       CASE
-                                           WHEN nd.active_plan_trial = 'BUSINESS_LARGE' THEN 'BUSINESS_TRIAL'
-                                           WHEN nd.active_plan_trial = 'ENTERPRISE' THEN 'ENTERPRISE_TRIAL'
-                                           WHEN nd.active_plan_trial IS NOT NULL THEN 'PLAN_TRIAL'
-                                           ELSE slt.key
-                                           END                                                             AS subscription_type,
-                                       CASE
-                                           WHEN nd.active_plan_trial = 'BUSINESS_LARGE' THEN 'business'
-                                           WHEN nd.active_plan_trial = 'ENTERPRISE' THEN 'enterprise'
-                                           WHEN (nd.appsumo_business_eligible = TRUE) THEN 'Business Plan'
-                                           WHEN EXISTS(SELECT 1
-                                                       FROM licensing_custom_subs lcs
-                                                       WHERE lcs.user_id = nd.owner_id
-                                                         AND lcs.status IN ('active', 'pending'))
-                                               THEN (SELECT lpp.display_name
-                                                     FROM licensing_custom_subs lcs
-                                                              JOIN licensing_custom_plan_pricing lpp ON lpp.id = lcs.plan_tier_id
-                                                     WHERE lcs.user_id = nd.owner_id
-                                                       AND lcs.status IN ('active', 'pending')
-                                                     ORDER BY lcs.created_at DESC
-                                                     LIMIT 1)
-                                           ELSE (SELECT name
-                                                 FROM licensing_pricing_plans lpp
-                                                          LEFT JOIN licensing_user_subscriptions lus
-                                                                    ON lus.subscription_plan_id = lpp.paddle_id
-                                                 WHERE lus.user_id = nd.owner_id
-                                                   AND lus.active IS TRUE
-                                                 LIMIT 1)
-                                           END                                                             AS plan_name,
+                                       'COMMUNITY'                                                         AS subscription_type,
+                                       'Community Edition'                                                 AS plan_name,
                                        tm.id                                                               AS team_member_id,
                                        ad.alerts,
                                        nd.active_plan_trial,
                                        nd.plan_trial_end_date,
                                        nd.trial_days_remaining,
                                        nd.trial_plan_display_name,
-                                       CASE WHEN nd.active_plan_trial IS NOT NULL THEN TRUE ELSE FALSE END AS is_plan_trial,
+                                       nd.is_plan_trial,
                                        CASE
                                            WHEN nd.subscription_status = 'trialing' THEN nd.trial_expire_date::DATE
-                                           WHEN nd.active_plan_trial IS NOT NULL THEN nd.plan_trial_end_date::DATE
-                                           WHEN EXISTS(SELECT 1
-                                                       FROM licensing_custom_subs
-                                                       WHERE user_id = nd.owner_id
-                                                         AND status IN ('active', 'pending'))
-                                               THEN (SELECT COALESCE(end_date, next_billing_date)
-                                                     FROM licensing_custom_subs
-                                                     WHERE user_id = nd.owner_id
-                                                       AND status IN ('active', 'pending')
-                                                     ORDER BY created_at DESC
-                                                     LIMIT 1)::DATE
-                                           WHEN EXISTS(SELECT 1
-                                                       FROM licensing_user_subscriptions
-                                                       WHERE user_id = nd.owner_id
-                                                         AND active IS TRUE)
-                                               THEN (SELECT (next_bill_date)::DATE - INTERVAL '1 day'
-                                                     FROM licensing_user_subscriptions
-                                                     WHERE user_id = nd.owner_id
-                                                       AND active IS TRUE
-                                                     LIMIT 1)::DATE
                                            ELSE NULL
                                            END                                                             AS valid_till_date,
                                        CASE
@@ -1684,7 +1611,6 @@ BEGIN
                                 FROM notification_data nd
                                          CROSS JOIN alerts_data ad
                                          LEFT JOIN timezones tz ON tz.id = nd.timezone
-                                         LEFT JOIN sys_license_types slt ON slt.id = nd.license_type_id
                                          LEFT JOIN team_members tm
                                                    ON (tm.user_id = nd.id AND tm.team_id = nd.team_id AND tm.active IS TRUE))
     SELECT ROW_TO_JSON(complete_user_data.*)

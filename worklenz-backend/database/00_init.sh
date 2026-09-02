@@ -3,9 +3,36 @@ set -e
 
 echo "Starting database initialization..."
 
-SQL_DIR="/docker-entrypoint-initdb.d/sql"
-MIGRATIONS_DIR="/docker-entrypoint-initdb.d/migrations"
-BACKUP_DIR="/docker-entrypoint-initdb.d/pg_backups"
+# --------------------------------------------
+# Configurable paths — default to the Docker
+# /docker-entrypoint-initdb.d* layout but allow
+# overrides for local dev or custom deployments.
+# --------------------------------------------
+SQL_DIR="${SQL_DIR:-/docker-entrypoint-initdb.d/sql}"
+MIGRATIONS_DIR="${MIGRATIONS_DIR:-/docker-entrypoint-initdb.d/migrations}"
+BACKUP_DIR="${BACKUP_DIR:-/docker-entrypoint-initdb.d/pg_backups}"
+
+# --------------------------------------------
+# Helper: apply a single migration file if it
+# has not already been applied. Tracks state in
+# the schema_migrations table so re-runs are safe.
+# --------------------------------------------
+apply_migration_file() {
+  local file="$1"
+  local version
+  version=$(basename "$file")
+
+  if psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc \
+      "SELECT 1 FROM schema_migrations WHERE version = '$version'" | grep -q 1; then
+    echo "Skipping already applied migration: $version"
+    return 0
+  fi
+
+  echo "Applying migration: $version"
+  psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f "$file"
+  psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c \
+      "INSERT INTO schema_migrations (version) VALUES ('$version');"
+}
 
 # --------------------------------------------
 # 🗄️ STEP 1: Attempt to restore latest backup
@@ -67,22 +94,47 @@ echo "✅ Base schema SQL execution complete."
 
 # --------------------------------------------
 # 🚀 STEP 3: Apply SQL migrations
+#
+# Ordering (important for dependency correctness):
+#   a. import-tasks/ subdirectory  — data / structural migrations
+#      that other migration sets depend on must go first.
+#   b. Root-level *.sql files     — chronological (timestamp-prefixed).
+#   c. release-* subdirectories   — version-ordered for upgrade paths.
 # --------------------------------------------
 
-if [ -d "$MIGRATIONS_DIR" ] && compgen -G "$MIGRATIONS_DIR/*.sql" > /dev/null; then
-  echo "Applying migrations..."
-  for f in "$MIGRATIONS_DIR"/*.sql; do
-    version=$(basename "$f")
-    if ! psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT 1 FROM schema_migrations WHERE version = '$version'" | grep -q 1; then
-      echo "Applying migration: $version"
-      psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f "$f"
-      psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "INSERT INTO schema_migrations (version) VALUES ('$version');"
-    else
-      echo "Skipping already applied migration: $version"
-    fi
+echo "Applying migrations..."
+
+# 3a. import-tasks/ migrations (must be first — other migrations reference
+#     the import infrastructure tables/functions defined here).
+if [ -d "$MIGRATIONS_DIR/import-tasks" ]; then
+  echo "  → Applying import-tasks migrations..."
+  for f in "$MIGRATIONS_DIR"/import-tasks/*.sql; do
+    [ -e "$f" ] || continue
+    apply_migration_file "$f"
   done
-else
-  echo "No migration files found or directory is empty, skipping migrations."
+fi
+
+# 3b. Root-level migration files (sorted alphabetically — they are
+#     timestamp-prefixed so alphabetical == chronological).
+if [ -d "$MIGRATIONS_DIR" ] && compgen -G "$MIGRATIONS_DIR/*.sql" > /dev/null 2>&1; then
+  echo "  → Applying root-level migrations..."
+  for f in "$MIGRATIONS_DIR"/*.sql; do
+    [ -e "$f" ] || continue
+    apply_migration_file "$f"
+  done
+fi
+
+# 3c. release-* subdirectories (sorted by directory name so release
+#     versions are applied in ascending order).
+if [ -d "$MIGRATIONS_DIR" ]; then
+  for dir in "$MIGRATIONS_DIR"/release-*; do
+    [ -d "$dir" ] || continue
+    echo "  → Applying migrations from $(basename "$dir")..."
+    for f in "$dir"/*.sql; do
+      [ -e "$f" ] || continue
+      apply_migration_file "$f"
+    done
+  done
 fi
 
 echo "🎉 Database initialization completed successfully."

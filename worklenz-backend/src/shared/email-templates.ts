@@ -1,7 +1,7 @@
 import {IEmailTemplateType} from "../interfaces/email-template-type";
 import {IPassportSession} from "../interfaces/passport-session";
 import {sendEmail} from "./email";
-import {sanitize, sanitizePlainText} from "./utils";
+import {sanitize, sanitizePlainText, log_error} from "./utils";
 import FileConstants from "./file-constants";
 import db from "../config/db";
 
@@ -62,6 +62,9 @@ export function sendWelcomeEmail(email: string, name: string) {
     to: [email],
     subject: "Welcome to Worklenz.",
     html: content
+  }).catch(error => {
+    // Welcome email failures must never crash the signup flow. Log and swallow.
+    log_error(error);
   });
 }
 

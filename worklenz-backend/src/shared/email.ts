@@ -1,3 +1,4 @@
+import nodemailer from "nodemailer";
 import { SendEmailCommand, SESClient } from "@aws-sdk/client-ses";
 import { Validator } from "jsonschema";
 import { QueryResult } from "pg";
@@ -7,7 +8,65 @@ import { log_error, isValidateEmail } from "./utils";
 import emailRequestSchema from "../json_schemas/email-request-schema";
 import db from "../config/db";
 
-const sesClient = new SESClient({ region: process.env.AWS_REGION });
+/**
+ * ---------------------------------------------------------------------------
+ * Email transport discovery
+ * ---------------------------------------------------------------------------
+ * The transport is chosen per-send based on what is configured in the
+ * environment.  This makes the module safe to import on a clean CE database
+ * that has:
+ *   - SMTP configured  (SMTP_HOST / SMTP_PORT, optionally SMTP_USER/SMTP_PASS)
+ *     -> uses Nodemailer SMTP transport.
+ *   - AWS SES configured (AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY + AWS_REGION)
+ *     -> uses the AWS SES API.
+ *   - NEITHER configured
+ *     -> logs a warning and reports a non-fatal failure.  Crucially this never
+ *        throws and never instantiates an SES client with a missing region
+ *        (the previous `new SESClient({ region: undefined })` at module load
+ *        was the source of the "Region is missing" crash on CE).
+ *
+ * The SES client is created lazily and ONLY when AWS credentials are present,
+ * so importing this module can no longer fail at startup.
+ */
+
+const SMTP_HOST = process.env.SMTP_HOST || process.env.EMAIL_HOST;
+const SMTP_PORT = process.env.SMTP_PORT || process.env.EMAIL_PORT;
+const SMTP_USER = process.env.SMTP_USER || process.env.EMAIL_USER;
+const SMTP_PASS = process.env.SMTP_PASS || process.env.EMAIL_PASS;
+const SMTP_SECURE = /^(1|true)$/i.test(process.env.SMTP_SECURE || "");
+const EMAIL_FROM = process.env.EMAIL_FROM || process.env.SMTP_FROM;
+
+export function isSmtpConfigured(): boolean {
+  return Boolean(SMTP_HOST && SMTP_PORT);
+}
+
+export function isAwsSesConfigured(): boolean {
+  return Boolean(
+    process.env.AWS_ACCESS_KEY_ID &&
+      process.env.AWS_SECRET_ACCESS_KEY &&
+      process.env.AWS_REGION,
+  );
+}
+
+let _sesClient: SESClient | null = null;
+
+function getSesClient(): SESClient {
+  if (!_sesClient) {
+    if (!isAwsSesConfigured()) {
+      throw new Error(
+        "AWS SES is not configured (set AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_REGION).",
+      );
+    }
+    _sesClient = new SESClient({
+      region: process.env.AWS_REGION as string,
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID as string,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY as string,
+      },
+    });
+  }
+  return _sesClient;
+}
 
 export interface IEmail {
   to?: string[];
@@ -43,7 +102,16 @@ function isValidMailBody(body: IEmail) {
 }
 
 async function removeMails(query: string, emails: string[]) {
-  const result: QueryResult<{ email: string }> = await db.query(query, []);
+  let result: QueryResult<{ email: string }>;
+  try {
+    result = await db.query(query, []);
+  } catch (error) {
+    // The bounce/spam/deleted tables may not exist in a fresh CE deployment,
+    // or the DB may be unavailable. Filtering is best-effort and must never
+    // prevent a message from being sent (or crash the request).
+    log_error(error);
+    return;
+  }
   const bouncedEmails = result.rows.map((e) => e.email);
   for (let i = emails.length - 1; i >= 0; i--) {
     const email = emails[i];
@@ -157,6 +225,71 @@ async function filterDeletedAccountEmails(emails: string[]): Promise<void> {
   );
 }
 
+/** Send through the AWS SES API. Only called when AWS creds are configured. */
+async function sendViaSes(email: IEmail): Promise<string> {
+  const client = getSesClient();
+
+  const charset = "UTF-8";
+
+  const plainText = lodash.unescape(
+    sanitizeHtmlLib(email.html, { allowedTags: [], allowedAttributes: {} })
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const command = new SendEmailCommand({
+    Destination: {
+      ToAddresses: email.to,
+    },
+    Message: {
+      Subject: {
+        Charset: charset,
+        Data: email.subject,
+      },
+      Body: {
+        Html: {
+          Charset: charset,
+          Data: email.html,
+        },
+        Text: {
+          Charset: charset,
+          Data: plainText,
+        },
+      },
+    },
+    Source: "Worklenz <noreply@worklenz.com>",
+  });
+
+  const res = await client.send(command);
+  return res.MessageId || String(Date.now());
+}
+
+/** Send through a Nodemailer SMTP transport. Used when SMTP_* is configured. */
+async function sendViaSmtp(email: IEmail): Promise<string> {
+  const transporter = nodemailer.createTransport({
+    host: SMTP_HOST as string,
+    port: Number(SMTP_PORT),
+    secure: SMTP_SECURE,
+    auth: {
+      user: SMTP_USER as string,
+      pass: SMTP_PASS as string,
+    },
+    pool: true,
+    maxConnections: 5,
+    rateLimit: 10,
+  });
+
+  const from = EMAIL_FROM || SMTP_USER || "Worklenz <noreply@worklenz.com>";
+  const info = await transporter.sendMail({
+    from,
+    to: (email.to || []).join(", "),
+    subject: email.subject,
+    html: email.html,
+  });
+
+  return (typeof info.messageId === "string" && info.messageId) || String(Date.now());
+}
+
 export async function sendEmail(email: IEmail): Promise<string | null> {
   const result = await sendEmailEnhanced(email);
   return result.success ? result.messageId || null : null;
@@ -221,47 +354,35 @@ export async function sendEmailEnhanced(email: IEmail): Promise<IEmailResult> {
 
     let messageId: string | undefined;
 
-    // Send via AWS SES
-    console.log("\n📧 Sending email via AWS SES...");
-    console.log("To:", options.to.join(", "));
-    console.log("Subject:", options.subject);
-
-    const charset = "UTF-8";
-    
-    // Generate plain text version by stripping HTML tags. Use sanitize-html
-    // (drops <script>/<style> and their contents reliably) then decode entities
-    // so the plaintext body reads naturally.
-    const plainText = lodash.unescape(
-      sanitizeHtmlLib(options.html, { allowedTags: [], allowedAttributes: {} })
-    )
-      .replace(/\s+/g, ' ')
-      .trim();
-    
-    const command = new SendEmailCommand({
-      Destination: {
-        ToAddresses: options.to,
-      },
-      Message: {
-        Subject: {
-          Charset: charset,
-          Data: options.subject,
+    // Choose a transport. SMTP is preferred (CE production runs a standard
+    // SMTP server); SES is only used when explicit AWS credentials + region
+    // are present. When neither is configured we fail gracefully.
+    if (isSmtpConfigured()) {
+      console.log("\n📧 Sending email via SMTP (nodemailer)...");
+      console.log("To:", options.to.join(", "));
+      console.log("Subject:", options.subject);
+      messageId = await sendViaSmtp(options);
+    } else if (isAwsSesConfigured()) {
+      console.log("\n📧 Sending email via AWS SES...");
+      console.log("To:", options.to.join(", "));
+      console.log("Subject:", options.subject);
+      messageId = await sendViaSes(options);
+    } else {
+      console.warn(
+        "⚠️  No email transport configured. Set SMTP_HOST/SMTP_PORT " +
+          "(optionally SMTP_USER/SMTP_PASS) or AWS SES credentials to send email. " +
+          "Skipping delivery.",
+      );
+      return {
+        success: false,
+        error: {
+          code: "NO_EMAIL_TRANSPORT",
+          message:
+            "No email transport configured (set SMTP_* or AWS SES credentials).",
         },
-        Body: {
-          Html: {
-            Charset: charset,
-            Data: options.html,
-          },
-          Text: {
-            Charset: charset,
-            Data: plainText,
-          },
-        },
-      },
-      Source: "Worklenz <noreply@worklenz.com>",
-    });
+      };
+    }
 
-    const res = await sesClient.send(command);
-    messageId = res.MessageId;
     console.log("✅ Email sent successfully!");
     console.log("Message ID:", messageId);
 
@@ -277,7 +398,11 @@ export async function sendEmailEnhanced(email: IEmail): Promise<IEmailResult> {
       success: true,
       messageId,
     };
-  } catch (e) {
+  } catch (e: any) {
+    // Any sending error (SMTP disconnect, SES API failure, etc.) is non-fatal.
+    // Log it (console.warn + log_error) and return a structured failure so the
+    // caller — and ultimately the HTTP request / OAuth callback — never crashes.
+    console.warn("⚠️  Email send failed:", e?.message || e);
     log_error(e);
     const categorizedError = categorizeError(e);
 

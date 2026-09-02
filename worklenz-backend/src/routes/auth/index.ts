@@ -131,36 +131,47 @@ authRouter.get("/keycloak", (req, res, next) => {
 });
 
 authRouter.get("/keycloak/verify", (req, res, next) => {
-  let sessionError = "";
-  if ((req.session as any).error) {
-    sessionError = `?error=${encodeURIComponent((req.session as any).error as string)}`;
-    delete (req.session as any).error;
-  }
-
-  const failureRedirect = process.env.LOGIN_FAILURE_REDIRECT + sessionError;
-  const successRedirect = process.env.LOGIN_SUCCESS_REDIRECT as string;
-
-  passport.authenticate("keycloak", (err: any, user: any, info: any) => {
-    if (err) {
-      console.error("[Keycloak OAuth] verify callback error:", err?.message || err);
-      log_error(err);
-      return res.redirect(failureRedirect || "/");
+  try {
+    let sessionError = "";
+    if ((req.session as any).error) {
+      sessionError = `?error=${encodeURIComponent((req.session as any).error as string)}`;
+      delete (req.session as any).error;
     }
 
-    if (!user) {
-      console.error("[Keycloak OAuth] verify - no user returned. info:", JSON.stringify(info));
-      return res.redirect(failureRedirect || "/");
-    }
+    const failureRedirect = process.env.LOGIN_FAILURE_REDIRECT + sessionError;
+    const successRedirect = process.env.LOGIN_SUCCESS_REDIRECT as string;
 
-    req.logIn(user, (loginErr) => {
-      if (loginErr) {
-        console.error("[Keycloak OAuth] session login error:", loginErr?.message || loginErr);
-        log_error(loginErr);
+    passport.authenticate("keycloak", (err: any, user: any, info: any) => {
+      if (err) {
+        console.error("[Keycloak OAuth] verify callback error:", err?.message || err);
+        log_error(err);
         return res.redirect(failureRedirect || "/");
       }
-      return res.redirect(successRedirect || "/");
-    });
-  })(req, res, next);
+
+      if (!user) {
+        console.error("[Keycloak OAuth] verify - no user returned. info:", JSON.stringify(info));
+        return res.redirect(failureRedirect || "/");
+      }
+
+      req.logIn(user, (loginErr) => {
+        if (loginErr) {
+          console.error("[Keycloak OAuth] session login error:", loginErr?.message || loginErr);
+          log_error(loginErr);
+          return res.redirect(failureRedirect || "/");
+        }
+        return res.redirect(successRedirect || "/");
+      });
+    })(req, res, next);
+  } catch (error: any) {
+    // Non-fatal: any unexpected error (e.g. session access, env var issues,
+    // or a thrown exception from within passport) must never produce an
+    // unhandled rejection that leaves the browser hanging. Log and redirect
+    // to the failure page just like the other error paths above.
+    console.warn("[Keycloak OAuth] verify callback crashed:", error?.message || error);
+    log_error(error);
+    const failureRedirect = process.env.LOGIN_FAILURE_REDIRECT || "/";
+    return res.redirect(failureRedirect);
+  }
 });
 
 // Passport logout
