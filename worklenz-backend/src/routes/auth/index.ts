@@ -111,6 +111,58 @@ authRouter.post("/apple/verify", (req, res, next) => {
   })(req, res, next);
 });
 
+// Keycloak OpenID Connect authentication
+authRouter.get("/keycloak", (req, res, next) => {
+  // Store invitation data in session for retrieval in the verify callback.
+  // NOTE: passport-openidconnect manages its own state parameter internally
+  // (generates a random handle and stores appState in the session). Unlike
+  // passport-google-oauth20, it does NOT pass the `state` option through as a
+  // query parameter, so req.query.state in the callback is a random handle,
+  // not our JSON. We store invitation data directly in the session instead.
+  (req.session as any).keycloakInvitationData = {
+    teamMember: req.query.teamMember || null,
+    team: req.query.team || null,
+    teamName: req.query.teamName || null,
+    project: req.query.project || null
+  };
+  return passport.authenticate("keycloak", {
+    scope: ["openid", "email", "profile"]
+  })(req, res, next);
+});
+
+authRouter.get("/keycloak/verify", (req, res, next) => {
+  let sessionError = "";
+  if ((req.session as any).error) {
+    sessionError = `?error=${encodeURIComponent((req.session as any).error as string)}`;
+    delete (req.session as any).error;
+  }
+
+  const failureRedirect = process.env.LOGIN_FAILURE_REDIRECT + sessionError;
+  const successRedirect = process.env.LOGIN_SUCCESS_REDIRECT as string;
+
+  passport.authenticate("keycloak", (err: any, user: any, info: any) => {
+    if (err) {
+      console.error("[Keycloak OAuth] verify callback error:", err?.message || err);
+      log_error(err);
+      return res.redirect(failureRedirect || "/");
+    }
+
+    if (!user) {
+      console.error("[Keycloak OAuth] verify - no user returned. info:", JSON.stringify(info));
+      return res.redirect(failureRedirect || "/");
+    }
+
+    req.logIn(user, (loginErr) => {
+      if (loginErr) {
+        console.error("[Keycloak OAuth] session login error:", loginErr?.message || loginErr);
+        log_error(loginErr);
+        return res.redirect(failureRedirect || "/");
+      }
+      return res.redirect(successRedirect || "/");
+    });
+  })(req, res, next);
+});
+
 // Passport logout
 authRouter.get("/logout", AuthController.logout);
 

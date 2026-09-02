@@ -1671,6 +1671,7 @@ CREATE TABLE IF NOT EXISTS users (
     user_no         BIGINT                   DEFAULT NEXTVAL('users_user_no_seq'::REGCLASS) NOT NULL,
     timezone_id     UUID                                                                    NOT NULL,
     google_id       TEXT,
+    keycloak_id     TEXT,
     socket_id       TEXT,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP                      NOT NULL,
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP                      NOT NULL,

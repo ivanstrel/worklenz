@@ -16,6 +16,7 @@ export interface ILocalSession extends IUserType {
   role_name?: string;
   build_v?: string;
   is_google?: boolean;
+  is_keycloak?: boolean;
   setup_completed?: boolean;
   my_setup_completed?: boolean;
   timezone?: string;

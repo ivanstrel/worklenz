@@ -5,6 +5,7 @@ export const evt_login_page_visit = 'login_page_visit';
 export const evt_login_page_login = 'login_page_login';
 export const evt_login_with_email_click = 'login_with_email_click';
 export const evt_login_with_google_click = 'login_with_google_click';
+export const evt_login_with_keycloak_click = 'login_with_keycloak_click';
 export const evt_login_remember_me_click = 'login_remember_me_click';
 
 // Registration & Signup
@@ -12,6 +13,7 @@ export const evt_signup_page_visit = 'signup_page_visit';
 export const evt_signup_page_signup = 'signup_page_signup';
 export const evt_signup_with_email_click = 'signup_with_email_click';
 export const evt_signup_with_google_click = 'signup_with_google_click';
+export const evt_signup_with_keycloak_click = 'signup_with_keycloak_click';
 export const evt_forgot_password_page_visit = 'forgot_password_page_visit';
 export const evt_verify_reset_email_page_visit = 'verify_reset_email_page_visit';
 

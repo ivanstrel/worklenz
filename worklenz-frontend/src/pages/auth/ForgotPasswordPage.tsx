@@ -12,12 +12,17 @@ import { useMixpanelTracking } from '@/hooks/useMixpanelTracking';
 import {
   evt_forgot_password_page_visit,
   evt_reset_password_click,
+  evt_login_with_google_click,
+  evt_login_with_keycloak_click,
 } from '@/shared/worklenz-analytics-events';
 import { resetPassword, verifyAuthentication } from '@features/auth/authSlice';
 import { useAppDispatch } from '@/hooks/useAppDispatch';
 import { setSession } from '@/utils/session-helper';
 import { setUser } from '@features/user/userSlice';
 import logger from '@/utils/errorLogger';
+
+// Add Apple login event (following existing pattern in LoginPage/SignupPage)
+const evt_login_with_apple_click = 'login_with_apple_click';
 
 const ForgotPasswordPage = () => {
   const [form] = Form.useForm();
@@ -88,10 +93,27 @@ const ForgotPasswordPage = () => {
     [dispatch, trackMixpanelEvent]
   );
 
+  const enableGoogleLogin = import.meta.env.VITE_ENABLE_GOOGLE_LOGIN === 'true' || false;
+  const enableAppleLogin = import.meta.env.VITE_ENABLE_APPLE_LOGIN === 'true' || false;
+  const enableKeycloakLogin = import.meta.env.VITE_ENABLE_KEYCLOAK_LOGIN === 'true' || false;
+
   const handleGoogleSignIn = useCallback(() => {
-    const googleAuthUrl = `/api/auth/google${urlParams.teamId ? `?state=${JSON.stringify({ team: urlParams.teamId })}` : ''}`;
-    window.location.href = googleAuthUrl;
-  }, [urlParams.teamId]);
+    trackMixpanelEvent(evt_login_with_google_click);
+    const url = `${import.meta.env.VITE_API_URL}/secure/google`;
+    window.location.href = url;
+  }, [trackMixpanelEvent]);
+
+  const handleAppleSignIn = useCallback(() => {
+    trackMixpanelEvent(evt_login_with_apple_click);
+    const url = `${import.meta.env.VITE_API_URL}/secure/apple`;
+    window.location.href = url;
+  }, [trackMixpanelEvent]);
+
+  const handleKeycloakSignIn = useCallback(() => {
+    trackMixpanelEvent(evt_login_with_keycloak_click);
+    const url = `${import.meta.env.VITE_API_URL}/secure/keycloak`;
+    window.location.href = url;
+  }, [trackMixpanelEvent]);
 
   const handleTryDifferentEmail = useCallback(() => {
     setIsOAuthUser(false);
@@ -119,15 +141,39 @@ const ForgotPasswordPage = () => {
           title={t('oauthUserTitle')}
           subTitle={t('oauthUserMessage')}
           extra={[
-            <Button
-              key="google-signin"
-              type="primary"
-              size="large"
-              onClick={handleGoogleSignIn}
-              style={{ borderRadius: 4 }}
-            >
-              {t('signInWithGoogleButton')}
-            </Button>,
+            enableGoogleLogin && (
+              <Button
+                key="google-signin"
+                type="primary"
+                size="large"
+                onClick={handleGoogleSignIn}
+                style={{ borderRadius: 4 }}
+              >
+                {t('signInWithGoogleButton', { defaultValue: 'Sign in with Google' })}
+              </Button>
+            ),
+            enableAppleLogin && (
+              <Button
+                key="apple-signin"
+                type="primary"
+                size="large"
+                onClick={handleAppleSignIn}
+                style={{ borderRadius: 4 }}
+              >
+                {t('signInWithAppleButton', { defaultValue: 'Sign in with Apple' })}
+              </Button>
+            ),
+            enableKeycloakLogin && (
+              <Button
+                key="keycloak-signin"
+                type="primary"
+                size="large"
+                onClick={handleKeycloakSignIn}
+                style={{ borderRadius: 4 }}
+              >
+                {t('signInWithKeycloakButton', { defaultValue: 'Sign in with Keycloak' })}
+              </Button>
+            ),
             <Button
               key="try-different"
               type="default"
@@ -137,7 +183,7 @@ const ForgotPasswordPage = () => {
             >
               {t('tryDifferentEmailButton')}
             </Button>,
-          ]}
+          ].filter(Boolean)}
         />
       ) : (
         <>

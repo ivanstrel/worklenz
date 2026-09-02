@@ -26,7 +26,7 @@ export default class AccountDeletionController extends WorklenzControllerBase {
 
       // Get user's OAuth IDs for blacklist and token revocation
       const userDataQuery = `
-        SELECT id, email, name, google_id, apple_id
+        SELECT id, email, name, google_id, apple_id, keycloak_id
         FROM users
         WHERE id = $1
       `;
@@ -148,6 +148,10 @@ export default class AccountDeletionController extends WorklenzControllerBase {
                       {
                         "title": "Apple ID:",
                         "value": userData.apple_id || "N/A"
+                      },
+                      {
+                        "title": "Keycloak ID:",
+                        "value": userData.keycloak_id || "N/A"
                       },
                       {
                         "title": "Deletion Date:",

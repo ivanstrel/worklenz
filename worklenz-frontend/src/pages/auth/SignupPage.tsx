@@ -21,6 +21,7 @@ import {
   evt_signup_page_visit,
   evt_signup_with_email_click,
   evt_signup_with_google_click,
+  evt_signup_with_keycloak_click,
 } from '@/shared/worklenz-analytics-events';
 
 // Add Apple signup event (following existing pattern)
@@ -75,6 +76,7 @@ const SignupPage = () => {
 
   const enableGoogleLogin = import.meta.env.VITE_ENABLE_GOOGLE_LOGIN === 'true' || false;
   const enableAppleLogin = import.meta.env.VITE_ENABLE_APPLE_LOGIN === 'true' || false;
+  const enableKeycloakLogin = import.meta.env.VITE_ENABLE_KEYCLOAK_LOGIN === 'true' || false;
   const enableRecaptcha =
     import.meta.env.VITE_ENABLE_RECAPTCHA === 'true' &&
     import.meta.env.VITE_RECAPTCHA_SITE_KEY &&
@@ -284,6 +286,17 @@ const SignupPage = () => {
       window.location.href = url;
     } catch (error) {
       message.error('Failed to redirect to Apple sign up');
+    }
+  };
+
+  const onKeycloakSignUpClick = () => {
+    try {
+      trackMixpanelEvent(evt_signup_with_keycloak_click);
+      const queryParams = getInvitationQueryParams();
+      const url = `${import.meta.env.VITE_API_URL}/secure/keycloak${queryParams ? `?${queryParams}` : ''}`;
+      window.location.href = url;
+    } catch (error) {
+      message.error('Failed to redirect to Keycloak sign up');
     }
   };
 
@@ -505,7 +518,7 @@ const SignupPage = () => {
               {t('signupButton')}
             </Button>
 
-            {(enableGoogleLogin || enableAppleLogin) && (
+            {(enableGoogleLogin || enableAppleLogin || enableKeycloakLogin) && (
               <>
                 <Typography.Text style={{ textAlign: 'center' }}>{t('orText')}</Typography.Text>
 
@@ -544,6 +557,27 @@ const SignupPage = () => {
                   >
                     <img src={appleIcon} alt="apple icon" style={{ maxWidth: 20, width: '100%' }} />
                     {t('signUpWithAppleButton', { defaultValue: 'Sign up with Apple' })}
+                  </Button>
+                )}
+
+                {enableKeycloakLogin && (
+                  <Button
+                    block
+                    type="default"
+                    size="large"
+                    onClick={onKeycloakSignUpClick}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      borderRadius: 4,
+                    }}
+                  >
+                    <span style={{ maxWidth: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15l-5-5 1.41-1.41L11 14.17l7.59-7.59L20 8l-9 9z" fill="currentColor" />
+                      </svg>
+                    </span>
+                    {t('signInWithKeycloakButton', { defaultValue: 'Sign up with Keycloak' })}
                   </Button>
                 )}
               </>

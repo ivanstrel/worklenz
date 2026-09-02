@@ -31,6 +31,7 @@ import {
   evt_login_page_visit,
   evt_login_with_email_click,
   evt_login_with_google_click,
+  evt_login_with_keycloak_click,
   evt_login_remember_me_click,
   evt_login_page_login,
 } from '@/shared/worklenz-analytics-events';
@@ -66,6 +67,7 @@ const LoginPage: React.FC = () => {
 
   const enableGoogleLogin = import.meta.env.VITE_ENABLE_GOOGLE_LOGIN === 'true' || false;
   const enableAppleLogin = import.meta.env.VITE_ENABLE_APPLE_LOGIN === 'true' || false;
+  const enableKeycloakLogin = import.meta.env.VITE_ENABLE_KEYCLOAK_LOGIN === 'true' || false;
 
   // Use ref to prevent multiple executions of auth check
   const hasCheckedAuth = useRef(false);
@@ -260,6 +262,25 @@ const LoginPage: React.FC = () => {
     }
   }, [trackMixpanelEvent, urlParams]);
 
+  const handleKeycloakLogin = useCallback(() => {
+    try {
+      trackMixpanelEvent(evt_login_page_login);
+      trackMixpanelEvent(evt_login_with_keycloak_click);
+
+      // Include invitation parameters in Keycloak OAuth redirect
+      const params = new URLSearchParams();
+      if (urlParams.teamId) params.append('team', urlParams.teamId);
+      if (urlParams.userId) params.append('teamMember', urlParams.userId);
+      if (urlParams.projectId) params.append('project', urlParams.projectId);
+
+      const queryString = params.toString();
+      const url = `${import.meta.env.VITE_API_URL}/secure/keycloak${queryString ? `?${queryString}` : ''}`;
+      window.location.href = url;
+    } catch (error) {
+      logger.error('Keycloak login failed', error);
+    }
+  }, [trackMixpanelEvent, urlParams]);
+
   const handleRememberMeChange = useCallback(
     (checked: boolean) => {
       trackMixpanelEvent(evt_login_remember_me_click, { checked });
@@ -356,7 +377,7 @@ const LoginPage: React.FC = () => {
               {t('loginButton')}
             </Button>
 
-            {(enableGoogleLogin || enableAppleLogin) && (
+            {(enableGoogleLogin || enableAppleLogin || enableKeycloakLogin) && (
               <>
                 <Typography.Text style={{ textAlign: 'center' }}>{t('orText')}</Typography.Text>
 
@@ -383,6 +404,23 @@ const LoginPage: React.FC = () => {
                   >
                     <img src={appleIcon} alt="Apple" style={styles.googleIcon} />
                     {t('signInWithAppleButton', { defaultValue: 'Sign in with Apple' })}
+                  </Button>
+                )}
+
+                {enableKeycloakLogin && (
+                  <Button
+                    block
+                    type="default"
+                    size="large"
+                    onClick={handleKeycloakLogin}
+                    style={styles.googleButton}
+                  >
+                    <span style={{ ...styles.googleIcon, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15l-5-5 1.41-1.41L11 14.17l7.59-7.59L20 8l-9 9z" fill="currentColor" />
+                      </svg>
+                    </span>
+                    {t('signInWithKeycloakButton', { defaultValue: 'Sign in with Keycloak' })}
                   </Button>
                 )}
               </>

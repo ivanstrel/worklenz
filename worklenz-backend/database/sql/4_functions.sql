@@ -1542,6 +1542,7 @@ BEGIN
                                    u.setup_completed                                             AS my_setup_completed,
                                    u.mobile_app_banner_dismissed,
                                    (is_null_or_empty(u.google_id) IS FALSE)                      AS is_google,
+                                   (is_null_or_empty(u.keycloak_id) IS FALSE)                     AS is_keycloak,
                                    COALESCE(u.active_team,
                                             (SELECT id FROM teams WHERE user_id = u.id LIMIT 1)) AS team_id,
                                    u.active_team,

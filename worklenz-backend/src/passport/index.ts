@@ -7,6 +7,7 @@ import GoogleLogin from "./passport-strategies/passport-google";
 import GoogleMobileLogin from "./passport-strategies/passport-google-mobile";
 import AppleMobileLogin from "./passport-strategies/passport-apple-mobile";
 import AppleWebLogin from "./passport-strategies/passport-apple-web";
+import KeycloakLogin from "./passport-strategies/passport-keycloak";
 import LocalLogin from "./passport-strategies/passport-local-login";
 import LocalSignup from "./passport-strategies/passport-local-signup";
 
@@ -17,13 +18,23 @@ import LocalSignup from "./passport-strategies/passport-local-signup";
 export default (passport: PassportStatic) => {
   passport.use("local-login", LocalLogin);
   passport.use("local-signup", LocalSignup);
-  passport.use(GoogleLogin);
+
+  // Only register Google strategy if it's configured
+  if (GoogleLogin) {
+    passport.use(GoogleLogin);
+  }
+
   passport.use("google-mobile", GoogleMobileLogin);
   passport.use("apple-mobile", AppleMobileLogin);
 
   // Only register Apple Web strategy if it's configured
   if (AppleWebLogin) {
     passport.use("apple", AppleWebLogin);
+  }
+
+  // Only register Keycloak strategy if it's configured
+  if (KeycloakLogin) {
+    passport.use("keycloak", KeycloakLogin);
   }
 
   passport.serializeUser(serialize);

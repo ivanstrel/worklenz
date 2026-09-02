@@ -639,6 +639,7 @@ auto_configure_env() {
         sed -i.bak "s|^SERVER_CORS=.*|SERVER_CORS=https://localhost|" "$ENV_FILE"
         sed -i.bak "s|^SOCKET_IO_CORS=.*|SOCKET_IO_CORS=https://localhost|" "$ENV_FILE"
         sed -i.bak "s|^GOOGLE_CALLBACK_URL=.*|GOOGLE_CALLBACK_URL=https://localhost/auth/google/callback|" "$ENV_FILE"
+        sed -i.bak "s|^KEYCLOAK_CALLBACK_URL=.*|KEYCLOAK_CALLBACK_URL=https://localhost/secure/keycloak/verify|" "$ENV_FILE"
         needs_update=1
     else
         print_info "Configuring URLs for production domain: $domain..."
@@ -648,6 +649,7 @@ auto_configure_env() {
         sed -i.bak "s|^SERVER_CORS=.*|SERVER_CORS=https://$domain|" "$ENV_FILE"
         sed -i.bak "s|^SOCKET_IO_CORS=.*|SOCKET_IO_CORS=https://$domain|" "$ENV_FILE"
         sed -i.bak "s|^GOOGLE_CALLBACK_URL=.*|GOOGLE_CALLBACK_URL=https://$domain/auth/google/callback|" "$ENV_FILE"
+        sed -i.bak "s|^KEYCLOAK_CALLBACK_URL=.*|KEYCLOAK_CALLBACK_URL=https://$domain/secure/keycloak/verify|" "$ENV_FILE"
         needs_update=1
     fi
 

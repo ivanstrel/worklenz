@@ -1,0 +1,159 @@
+# =====================================================
+# Production Docker Compose for Worklenz
+# =====================================================
+# This compose file is optimized for production deployment.
+# It includes:
+#   - PostgreSQL database with persistent storage
+#   - Redis for session caching
+#   - MinIO for object storage
+#   - Nginx reverse proxy (external, configure separately)
+# =====================================================
+
+services:
+  frontend:
+    build:
+      context: ./worklenz-frontend
+      dockerfile: Dockerfile
+    container_name: worklenz_frontend_prod
+    restart: unless-stopped
+    env_file:
+      - ./worklenz-frontend/.env.production
+    networks:
+      - worklenz_net
+    labels:
+      - "nginx-proxy.enable=true"
+      - "nginx-proxy.domain"
+      - "nginx-proxy.port=5000"
+      - "nginx-proxy.proto=http"
+      - "nginx-proxy.letsencrypt_email=${LETSENCRYPT_EMAIL}"
+      - "nginx-proxy.letsencrypt_proto=http-01"
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: ./worklenz-backend
+      dockerfile: Dockerfile
+      args:
+        - NODE_ENV=production
+        - RELEASE_VERSION=${APP_VERSION:-latest}
+    container_name: worklenz_backend_prod
+    restart: unless-stopped
+    env_file:
+      - ./worklenz-backend/.env.production
+    networks:
+      - worklenz_net
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+
+  client-portal:
+    build:
+      context: ./worklenz-client-portal
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${CLIENT_PORTAL_API_BASE_URL:-http://backend:3000/api/client-portal}
+    container_name: worklenz_client_portal_prod
+    restart: unless-stopped
+    env_file:
+      - ./worklenz-client-portal/.env.production
+    networks:
+      - worklenz_net
+    depends_on:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    container_name: worklenz_redis_prod
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - worklenz_redis_data:/data
+    networks:
+      - worklenz_net
+
+  minio:
+    image: minio/minio:latest
+    container_name: worklenz_minio_prod
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+    volumes:
+      - worklenz_minio_data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - worklenz_net
+
+  createbuckets:
+    image: minio/mc
+    container_name: worklenz_createbuckets_prod
+    depends_on:
+      - minio
+    restart: on-failure
+    entrypoint: >
+      /bin/sh -c '
+        echo "Waiting for MinIO to start...";
+        sleep 15;
+        for i in 1 2 3 4 5; do
+          echo "Attempt $i to connect to MinIO...";
+          if /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin; then
+            echo "Successfully connected to MinIO!";
+            /usr/bin/mc mb --ignore-existing myminio/worklenz-bucket;
+            /usr/bin/mc policy set public myminio/worklenz-bucket;
+            exit 0;
+          fi
+          echo "Connection failed, retrying in 5 seconds...";
+          sleep 5;
+        done;
+        echo "Failed to connect to MinIO after 5 attempts";
+        exit 1;
+      '
+    networks:
+      - worklenz_net
+
+  db:
+    image: postgres:15
+    container_name: worklenz_db_prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_DB: ${DB_NAME:-worklenz_db}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -d ${DB_NAME:-worklenz_db} -U ${DB_USER:-postgres}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - worklenz_postgres_data:/var/lib/postgresql/data
+      - type: bind
+        source: ./worklenz-backend/database/sql
+        target: /docker-entrypoint-initdb.d/sql
+        consistency: cached
+      - type: bind
+        source: ./worklenz-backend/database/migrations
+        target: /docker-entrypoint-initdb.d/migrations
+        consistency: cached
+      - type: bind
+        source: ./worklenz-backend/database/00_init.sh
+        target: /docker-entrypoint-initdb.d/00_init.sh
+        consistency: cached
+    networks:
+      - worklenz_net
+
+volumes:
+  worklenz_postgres_data:
+  worklenz_minio_data:
+  worklenz_redis_data:
+
+networks:
+  worklenz_net:

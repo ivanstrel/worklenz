@@ -97,11 +97,34 @@ async function handleGoogleLogin(req: Request, _accessToken: string, _refreshTok
 /**
  * Passport strategy for authenticate with google
  * http://www.passportjs.org/packages/passport-google-oauth20/
+ *
+ * This strategy is conditionally exported based on environment configuration,
+ * following the same pattern as passport-apple-web.ts and passport-keycloak.ts.
  */
-export default new GoogleStrategy.Strategy({
-  clientID: process.env.GOOGLE_CLIENT_ID as string,
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
-  callbackURL: process.env.GOOGLE_CALLBACK_URL as string,
-  passReqToCallback: true
-},
-  (req, _accessToken, _refreshToken, profile, done) => void handleGoogleLogin(req, _accessToken, _refreshToken, profile, done));
+
+const isGoogleConfigured = () => {
+  return !!(
+    process.env.GOOGLE_CLIENT_ID &&
+    process.env.GOOGLE_CLIENT_SECRET &&
+    process.env.GOOGLE_CALLBACK_URL
+  );
+};
+
+// Only create strategy if Google is configured
+let googleStrategy: any = null;
+
+if (isGoogleConfigured()) {
+  googleStrategy = new GoogleStrategy.Strategy({
+    clientID: process.env.GOOGLE_CLIENT_ID as string,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
+    callbackURL: process.env.GOOGLE_CALLBACK_URL as string,
+    passReqToCallback: true
+  },
+    (req, _accessToken, _refreshToken, profile, done) => void handleGoogleLogin(req, _accessToken, _refreshToken, profile, done));
+} else {
+  console.warn(
+    "⚠️  Google Sign-In is not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_CALLBACK_URL in .env to enable it.",
+  );
+}
+
+export default googleStrategy;

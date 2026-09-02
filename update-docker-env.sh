@@ -84,7 +84,9 @@ SERVER_CORS=${FRONTEND_URL}
 # Google Login
 GOOGLE_CLIENT_ID="your_google_client_id"
 GOOGLE_CLIENT_SECRET="your_google_client_secret"
-GOOGLE_CALLBACK_URL="${FRONTEND_URL}/secure/google/verify"
+GOOGLE_CALLBACK_URL="${HTTP_PREFIX}${HOSTNAME}:3000/secure/google/verify"
+APPLE_CALLBACK_URL="${HTTP_PREFIX}${HOSTNAME}:3000/secure/apple/verify"
+KEYCLOAK_CALLBACK_URL="${HTTP_PREFIX}${HOSTNAME}:3000/secure/keycloak/verify"
 LOGIN_FAILURE_REDIRECT="${FRONTEND_URL}/auth/authenticating"
 LOGIN_SUCCESS_REDIRECT="${FRONTEND_URL}/auth/authenticating"
 

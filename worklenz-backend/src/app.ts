@@ -338,6 +338,10 @@ app.use((req, res, next) => {
     "/secure/apple",
     "/apple/verify",
     "/secure/apple/verify",
+    "/keycloak",
+    "/secure/keycloak",
+    "/keycloak/verify",
+    "/secure/keycloak/verify",
   ];
 
   if (authPaths.includes(req.path)) {

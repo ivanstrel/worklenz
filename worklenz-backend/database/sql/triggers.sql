@@ -143,7 +143,7 @@ BEGIN
     IF NEW.priority_id IS NULL
     THEN
         SELECT id
-        FROM task_priorities
+        FROM sys_project_priorities
         WHERE name = 'Medium'
         LIMIT 1
         INTO NEW.priority_id;

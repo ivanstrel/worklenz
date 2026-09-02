@@ -156,7 +156,7 @@ export default class AuthController extends WorklenzControllerBase {
       return res.status(200).send(new ServerResponse(true, null, GENERIC_SUCCESS_MESSAGE));
     };
 
-    const q = `SELECT id, email, google_id, apple_id, password FROM users WHERE LOWER(email) = $1;`;
+    const q = `SELECT id, email, google_id, apple_id, keycloak_id, password FROM users WHERE LOWER(email) = $1;`;
     const result = await db.query(q, [normalizedEmail]);
 
     if (!result.rowCount) {
@@ -165,8 +165,8 @@ export default class AuthController extends WorklenzControllerBase {
 
     const [data] = result.rows;
 
-    // For OAuth-only accounts (Google/Apple), don't send reset email
-    if (data?.google_id || data?.apple_id) {
+    // For OAuth-only accounts (Google/Apple/Keycloak), don't send reset email
+    if (data?.google_id || data?.apple_id || data?.keycloak_id) {
       log_error(`Password reset attempted for OAuth account: ${normalizedEmail}`, null);
       return sendGenericResponse();
     }
