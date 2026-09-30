@@ -36,6 +36,10 @@ const SMTP_PASS = process.env.SMTP_PASS || process.env.EMAIL_PASS;
 const SMTP_SECURE = /^(1|true)$/i.test(process.env.SMTP_SECURE || "");
 const EMAIL_FROM = process.env.EMAIL_FROM || process.env.SMTP_FROM;
 
+// Verbose per-send logging (recipients, subjects, message ids) is opt-in so
+// that PII never lands in production stdout unless explicitly requested.
+const EMAIL_DEBUG = /^(1|true)$/i.test(process.env.EMAIL_DEBUG || "");
+
 export function isSmtpConfigured(): boolean {
   return Boolean(SMTP_HOST && SMTP_PORT);
 }
@@ -66,6 +70,28 @@ function getSesClient(): SESClient {
     });
   }
   return _sesClient;
+}
+
+// Build the pooled SMTP transport exactly once and reuse it. Creating a new
+// pooled transport per send (and never closing it) leaks sockets/connections
+// under load, so the transporter is a lazy module-scoped singleton.
+let _smtpTransporter: nodemailer.Transporter | null = null;
+
+function getSmtpTransporter(): nodemailer.Transporter {
+  if (!_smtpTransporter) {
+    _smtpTransporter = nodemailer.createTransport({
+      host: SMTP_HOST as string,
+      port: Number(SMTP_PORT),
+      secure: SMTP_SECURE,
+      auth: SMTP_USER
+        ? { user: SMTP_USER as string, pass: SMTP_PASS as string }
+        : undefined,
+      pool: true,
+      maxConnections: 5,
+      rateLimit: 10,
+    });
+  }
+  return _smtpTransporter;
 }
 
 export interface IEmail {
@@ -163,6 +189,10 @@ function categorizeError(error: any): {
   message: string;
   details?: any;
 } {
+  if (!error) {
+    return { code: "UNKNOWN_ERROR", message: "Unknown error occurred" };
+  }
+
   if (error.name === "MessageRejected") {
     return {
       code: "MESSAGE_REJECTED",
@@ -257,7 +287,7 @@ async function sendViaSes(email: IEmail): Promise<string> {
         },
       },
     },
-    Source: "Worklenz <noreply@worklenz.com>",
+    Source: EMAIL_FROM || "Worklenz <noreply@worklenz.com>",
   });
 
   const res = await client.send(command);
@@ -266,18 +296,7 @@ async function sendViaSes(email: IEmail): Promise<string> {
 
 /** Send through a Nodemailer SMTP transport. Used when SMTP_* is configured. */
 async function sendViaSmtp(email: IEmail): Promise<string> {
-  const transporter = nodemailer.createTransport({
-    host: SMTP_HOST as string,
-    port: Number(SMTP_PORT),
-    secure: SMTP_SECURE,
-    auth: {
-      user: SMTP_USER as string,
-      pass: SMTP_PASS as string,
-    },
-    pool: true,
-    maxConnections: 5,
-    rateLimit: 10,
-  });
+  const transporter = getSmtpTransporter();
 
   const from = EMAIL_FROM || SMTP_USER || "Worklenz <noreply@worklenz.com>";
   const info = await transporter.sendMail({
@@ -358,14 +377,18 @@ export async function sendEmailEnhanced(email: IEmail): Promise<IEmailResult> {
     // SMTP server); SES is only used when explicit AWS credentials + region
     // are present. When neither is configured we fail gracefully.
     if (isSmtpConfigured()) {
-      console.log("\n📧 Sending email via SMTP (nodemailer)...");
-      console.log("To:", options.to.join(", "));
-      console.log("Subject:", options.subject);
+      if (EMAIL_DEBUG) {
+        console.log("\n📧 Sending email via SMTP (nodemailer)...");
+        console.log("To:", options.to.join(", "));
+        console.log("Subject:", options.subject);
+      }
       messageId = await sendViaSmtp(options);
     } else if (isAwsSesConfigured()) {
-      console.log("\n📧 Sending email via AWS SES...");
-      console.log("To:", options.to.join(", "));
-      console.log("Subject:", options.subject);
+      if (EMAIL_DEBUG) {
+        console.log("\n📧 Sending email via AWS SES...");
+        console.log("To:", options.to.join(", "));
+        console.log("Subject:", options.subject);
+      }
       messageId = await sendViaSes(options);
     } else {
       console.warn(
@@ -383,8 +406,10 @@ export async function sendEmailEnhanced(email: IEmail): Promise<IEmailResult> {
       };
     }
 
-    console.log("✅ Email sent successfully!");
-    console.log("Message ID:", messageId);
+    if (EMAIL_DEBUG) {
+      console.log("✅ Email sent successfully!");
+      console.log("Message ID:", messageId);
+    }
 
     // Update log status to sent
     // Append index to messageId to make it unique per recipient when sending to multiple

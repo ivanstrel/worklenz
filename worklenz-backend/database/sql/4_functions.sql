@@ -1543,6 +1543,7 @@ BEGIN
                                    u.mobile_app_banner_dismissed,
                                    (is_null_or_empty(u.google_id) IS FALSE)                      AS is_google,
                                    (is_null_or_empty(u.keycloak_id) IS FALSE)                     AS is_keycloak,
+                                   (is_null_or_empty(u.password) IS FALSE)                        AS has_password,
                                    COALESCE(u.active_team,
                                             (SELECT id FROM teams WHERE user_id = u.id LIMIT 1)) AS team_id,
                                    u.active_team,

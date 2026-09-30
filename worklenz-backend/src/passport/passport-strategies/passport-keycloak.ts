@@ -5,6 +5,10 @@ import db from "../../config/db";
 import { ERROR_KEY } from "./passport-constants";
 import { Request } from "express";
 
+// Verbose OAuth error dumps (full error objects + stack traces) are opt-in so
+// they don't flood production logs. log_error always still records the error.
+const AUTH_DEBUG = /^(1|true)$/i.test(process.env.AUTH_DEBUG || "");
+
 async function handleKeycloakLogin(req: Request, _issuer: string, profile: OpenIDConnectProfile, done: any) {
   try {
     const body: any = profile;
@@ -24,11 +28,19 @@ async function handleKeycloakLogin(req: Request, _issuer: string, profile: OpenI
     // Clean up invitation data from session after reading
     delete (req.session as any).keycloakInvitationData;
 
+    // Only trust the email claim for account matching/linking when the IdP
+    // asserts it as verified. Linking a Keycloak identity onto a pre-existing
+    // account based solely on an unverified email would allow account takeover
+    // in any realm that permits self-registration or does not enforce email
+    // verification. Unverified identities may still sign in or register by
+    // their stable `sub` (keycloak_id), never by email.
+    const emailVerified = (profile as any)?._json?.email_verified === true;
+
     const q1 = `SELECT id, keycloak_id, name, email, active_team
                 FROM users
-                WHERE (keycloak_id = $1 OR email = $2)
+                WHERE (keycloak_id = $1 OR ($2::boolean AND email = $3))
                   AND is_deleted = FALSE;`;
-    const result1 = await db.query(q1, [body.id, body.email]);
+    const result1 = await db.query(q1, [body.id, emailVerified, body.email]);
 
     if (result1.rowCount) { // Login
       const [user] = result1.rows;
@@ -56,43 +68,60 @@ async function handleKeycloakLogin(req: Request, _issuer: string, profile: OpenI
       return done(null, false, { message: "User not found" });
     }
 
-    // Check if a soft-deleted user exists with this email
-    const deletedCheck = await db.query(
-      "SELECT id, email FROM users WHERE LOWER(email) = LOWER($1) AND is_deleted = TRUE;",
-      [body.email]
-    );
-
-    if (deletedCheck.rowCount) {
-      // Reactivate the soft-deleted account and link Keycloak ID
-      const [deletedUser] = deletedCheck.rows;
-      await db.query(
-        "UPDATE users SET is_deleted = FALSE, keycloak_id = $1, name = COALESCE($2, name) WHERE id = $3;",
-        [body.id, body.displayName, deletedUser.id]
+    // Reactivating a soft-deleted account and linking a Keycloak identity onto
+    // it is the same trust decision as the email match above, so require a
+    // verified email.
+    if (emailVerified) {
+      const deletedCheck = await db.query(
+        "SELECT id, email FROM users WHERE LOWER(email) = LOWER($1) AND is_deleted = TRUE;",
+        [body.email]
       );
 
-      // Update active team if from invitation
-      try {
-        await db.query("SELECT set_active_team($1, $2);", [deletedUser.id, state.team || null]);
-      } catch (error) {
-        log_error(error);
-      }
+      if (deletedCheck.rowCount) {
+        // Reactivate the soft-deleted account and link Keycloak ID
+        const [deletedUser] = deletedCheck.rows;
+        await db.query(
+          "UPDATE users SET is_deleted = FALSE, keycloak_id = $1, name = COALESCE($2, name) WHERE id = $3;",
+          [body.id, body.displayName, deletedUser.id]
+        );
 
-      return done(null, { id: deletedUser.id, email: deletedUser.email, keycloak_id: body.id });
+        // Update active team if from invitation
+        try {
+          await db.query("SELECT set_active_team($1, $2);", [deletedUser.id, state.team || null]);
+        } catch (error) {
+          log_error(error);
+        }
+
+        return done(null, { id: deletedUser.id, email: deletedUser.email, keycloak_id: body.id });
+      }
     }
 
-    // Register new user
-    const q2 = `SELECT register_keycloak_user($1) AS user;`;
-    const result2 = await db.query(q2, [JSON.stringify(body)]);
+    // Register a brand-new user keyed by the Keycloak `sub`. If another account
+    // already owns this email but the identity's email was not verified (so it
+    // could not be matched above), the unique constraint on email fires here —
+    // refuse the login rather than link or duplicate. That is the secure outcome.
+    let result2;
+    try {
+      result2 = await db.query(`SELECT register_keycloak_user($1) AS user;`, [JSON.stringify(body)]);
+    } catch (regError: any) {
+      if (regError?.code === "23505") {
+        log_error("Keycloak registration blocked: email already in use and not verified", body.email);
+        return done(null, false, { message: "Email already registered with another sign-in method" });
+      }
+      throw regError;
+    }
     const [data] = result2.rows;
 
     sendWelcomeEmail(data.user.email, body.displayName);
     return done(null, data.user, { message: "User successfully logged in" });
   } catch (error: any) {
-    console.error("[Keycloak OAuth] handleKeycloakLogin CAUGHT ERROR:");
-    console.error("[Keycloak OAuth] error:", error);
-    console.error("[Keycloak OAuth] message:", error?.message);
-    console.error("[Keycloak OAuth] code:", error?.code);
-    console.error("[Keycloak OAuth] stack:", error?.stack);
+    if (AUTH_DEBUG) {
+      console.error("[Keycloak OAuth] handleKeycloakLogin CAUGHT ERROR:");
+      console.error("[Keycloak OAuth] error:", error);
+      console.error("[Keycloak OAuth] message:", error?.message);
+      console.error("[Keycloak OAuth] code:", error?.code);
+      console.error("[Keycloak OAuth] stack:", error?.stack);
+    }
     log_error(error);
     return done(error);
   }

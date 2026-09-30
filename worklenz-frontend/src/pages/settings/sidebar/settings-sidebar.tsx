@@ -46,8 +46,17 @@ const SettingSidebar: React.FC = () => {
     () =>
       getAccessibleSettings(isOwnerOrAdmin, currentSession)
         .filter(item => item.showInSidebar !== false)
-        .filter(item => !(currentSession?.is_google && item.key === 'change-password'))
-        .filter(item => !(currentSession?.is_keycloak && item.key === 'change-password'))
+        // Hide change-password only for SSO-only accounts (Google/Keycloak with no
+        // local password). Accounts that linked SSO onto an existing email/password
+        // login still have a password and must keep the ability to change it.
+        .filter(
+          item =>
+            !(
+              (currentSession?.is_google || currentSession?.is_keycloak) &&
+              !currentSession?.has_password &&
+              item.key === 'change-password'
+            )
+        )
         .reduce<
     Array<{
       key: string;

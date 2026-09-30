@@ -125,9 +125,18 @@ authRouter.get("/keycloak", (req, res, next) => {
     teamName: req.query.teamName || null,
     project: req.query.project || null
   };
-  return passport.authenticate("keycloak", {
-    scope: ["openid", "email", "profile"]
-  })(req, res, next);
+  try {
+    return passport.authenticate("keycloak", {
+      scope: ["openid", "email", "profile"]
+    })(req, res, next);
+  } catch (error: any) {
+    // If the Keycloak strategy is not registered (Keycloak not configured),
+    // passport throws synchronously here. Redirect to the failure page instead
+    // of surfacing a 500.
+    console.warn("[Keycloak OAuth] initiate failed:", error?.message || error);
+    log_error(error);
+    return res.redirect(process.env.LOGIN_FAILURE_REDIRECT || "/");
+  }
 });
 
 authRouter.get("/keycloak/verify", (req, res, next) => {
